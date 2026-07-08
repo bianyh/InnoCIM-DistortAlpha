@@ -1,0 +1,12 @@
+torch
+torchvision
+torchaudio
+transformers
+datasets
+librosa
+soundfile
+numpy
+pandas
+matplotlib
+seaborn
+tqdm

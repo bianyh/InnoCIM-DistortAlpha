@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local secrets and environment files
+.env
+.env.*
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Datasets and local caches
+data/*
+!data/README.md
+*.tar
+*.tar.gz
+*.zip
+
+# Experiment outputs
+outputs/*
+!outputs/README.md
+*.log
+*.pid
+
+# Model checkpoints and binary artifacts
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# Optional experiment trackers
+wandb/
+mlruns/
+runs/
+
