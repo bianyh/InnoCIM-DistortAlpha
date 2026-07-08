@@ -26,6 +26,26 @@ class NonlinearityConfig:
 
 
 @dataclass(frozen=True)
+class GaussianNoiseConfig:
+    sigma: float = 0.05
+    relative: bool = True
+    eps: float = 1e-12
+    scope: str = "per_tensor"
+
+
+@dataclass(frozen=True)
+class UniformQuantizationConfig:
+    bits: int = 4
+    eps: float = 1e-12
+    scope: str = "per_tensor"
+    simulate_hardware_nonlinearity: bool = False
+    random_alpha: bool = True
+    alpha: float = 1.0
+    alpha_low: float = -1.0
+    alpha_high: float = 1.0
+
+
+@dataclass(frozen=True)
 class PreCompensationConfig:
     beta: float = 0.0
     eps: float = 1e-12
@@ -68,6 +88,31 @@ def nonlinearize_tensor(x: torch.Tensor, config: NonlinearityConfig) -> torch.Te
     u = x / max_val
     y = config.alpha * (u**3) + (1.0 - config.alpha) * u
     return y * max_val
+
+
+def gaussian_noise_tensor(x: torch.Tensor, config: GaussianNoiseConfig) -> torch.Tensor:
+    """Add zero-mean Gaussian noise to one activation tensor."""
+    sigma = float(config.sigma)
+    if sigma <= 0.0:
+        return x
+    if config.relative:
+        scale = normalization_max(x, scope=config.scope, eps=config.eps)
+    else:
+        scale = torch.as_tensor(1.0, device=x.device, dtype=x.dtype)
+    return x + torch.randn_like(x) * scale * sigma
+
+
+def uniform_quantize_tensor(x: torch.Tensor, config: UniformQuantizationConfig) -> torch.Tensor:
+    """Quantize x with symmetric magnitude levels in the normalized domain."""
+    bits = max(1, int(config.bits))
+    levels = float((1 << bits) - 1)
+    max_val = normalization_max(x, scope=config.scope, eps=config.eps)
+    u = (x / max_val).clamp(min=-1.0, max=1.0)
+    q = torch.sign(u) * torch.round(u.abs() * levels) / levels
+    if x.requires_grad:
+        quantized = q * max_val
+        return x + (quantized - x).detach()
+    return q * max_val
 
 
 def nonlinear_error_basis(x: torch.Tensor, scope: str = "per_tensor", eps: float = 1e-12) -> torch.Tensor:
@@ -303,6 +348,88 @@ class EndpointAlphaNonlinearityInjector(RandomAlphaNonlinearityInjector):
 
     def _sample_alpha(self) -> float:
         return -1.0 if random.random() < 0.5 else 1.0
+
+
+class GaussianNoiseInjector(NonlinearityInjector):
+    """Adds independent Gaussian noise to target-operator inputs."""
+
+    def __init__(
+        self,
+        model: nn.Module,
+        noise_config: GaussianNoiseConfig | None = None,
+        enabled_layers: Iterable[str] | None = None,
+        target_types: tuple[type[nn.Module], ...] = DEFAULT_TARGET_TYPES,
+        include: Callable[[str, nn.Module], bool] | None = None,
+    ) -> None:
+        cfg = noise_config or GaussianNoiseConfig()
+        super().__init__(
+            model=model,
+            config=NonlinearityConfig(alpha=0.0, eps=cfg.eps, scope=cfg.scope),
+            enabled_layers=enabled_layers,
+            target_types=target_types,
+            include=include,
+        )
+        self.noise_config = cfg
+
+    def _make_hook(self, name: str):
+        def hook(module: nn.Module, inputs: tuple[torch.Tensor, ...]):
+            if not inputs:
+                return inputs
+            x = inputs[0]
+            if not torch.is_tensor(x):
+                return inputs
+            noisy = gaussian_noise_tensor(x, self.noise_config)
+            return (noisy, *inputs[1:])
+
+        return hook
+
+
+class UniformQuantizationInjector(NonlinearityInjector):
+    """Quantizes target-operator inputs before optional cubic hardware distortion."""
+
+    def __init__(
+        self,
+        model: nn.Module,
+        quant_config: UniformQuantizationConfig | None = None,
+        enabled_layers: Iterable[str] | None = None,
+        target_types: tuple[type[nn.Module], ...] = DEFAULT_TARGET_TYPES,
+        include: Callable[[str, nn.Module], bool] | None = None,
+    ) -> None:
+        cfg = quant_config or UniformQuantizationConfig()
+        super().__init__(
+            model=model,
+            config=NonlinearityConfig(alpha=0.0, eps=cfg.eps, scope=cfg.scope),
+            enabled_layers=enabled_layers,
+            target_types=target_types,
+            include=include,
+        )
+        self.quant_config = cfg
+
+    def _sample_alpha(self) -> float:
+        if self.quant_config.random_alpha:
+            return random.uniform(self.quant_config.alpha_low, self.quant_config.alpha_high)
+        return float(self.quant_config.alpha)
+
+    def _make_hook(self, name: str):
+        def hook(module: nn.Module, inputs: tuple[torch.Tensor, ...]):
+            if not inputs:
+                return inputs
+            x = inputs[0]
+            if not torch.is_tensor(x):
+                return inputs
+            quantized = uniform_quantize_tensor(x, self.quant_config)
+            if self.quant_config.simulate_hardware_nonlinearity:
+                quantized = nonlinearize_tensor(
+                    quantized,
+                    NonlinearityConfig(
+                        alpha=self._sample_alpha(),
+                        eps=self.quant_config.eps,
+                        scope=self.quant_config.scope,
+                    ),
+                )
+            return (quantized, *inputs[1:])
+
+        return hook
 
 
 class FixedPointInputProjector(NonlinearityInjector):

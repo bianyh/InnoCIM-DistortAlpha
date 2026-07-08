@@ -14,5 +14,5 @@
 | `task3_fpc_paper_experiments_report.md` | FPC 论文实验报告 |
 | `task4_unknown_distortion_bpic_report.md` | 未知失真公式下 BPIC 扩展报告 |
 | `per_occurrence_random_alpha_fpc_report.md` | 每算子随机 alpha 协议下的 FPC 报告 |
+| `extension_research_report.md` | 拓展研究报告：结构/参数量、高斯噪声机制、量化与非线性叠加 |
 | `paper_figures/` | 论文级 PNG/PDF 图表 |
-
